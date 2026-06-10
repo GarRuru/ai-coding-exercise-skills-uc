@@ -92,6 +92,54 @@ COMMAND sub-types (based on `method` field):
 
 ---
 
+## PATTERN Spec Fields (ReadOnly Entity)
+
+> Detected by top-level `"pattern"` + `"entity"` fields.
+
+| JSON Field | Code Generation Target | Notes |
+|------------|----------------------|-------|
+| `spec.pattern` | Type discriminator (`"ReadOnlyEntities"`) | Detection key |
+| `spec.implementation` | Generation strategy (`"Proxy"` or `"SpecialCase"`) | Proxy = composition; SpecialCase = inheritance |
+| `spec.packageInfo.entityPackage` | Java package for interface + proxy class | e.g., `tw.teddysoft.aiscrum.pbi.entity` |
+| `spec.packageInfo.testPackage` | Java package for test class | Same as entityPackage |
+| `spec.aggregate` | Aggregate Root class name | Used for AR changes notice |
+| `spec.entity.name` | Original Entity class name | Must add `implements {interface}` |
+| `spec.entity.interface` | Interface to extract | `ITask`, `IProjectGoal`, etc. |
+| `spec.entity.readOnlyName` | Proxy class name | `ReadOnlyTask`, etc. |
+| `spec.interfaceDefinition.queryMethods[]` | Interface query method signatures | All readable methods |
+| `spec.interfaceDefinition.commandMethods[]` | Interface command method signatures | Methods to block in proxy |
+| `spec.methodRules.commands[].signature` | Override method signature in proxy | Throws `UnsupportedOperationException` |
+| `spec.methodRules.commands[].implementation` | Exception message string | Used verbatim in `throw new UOE(...)` |
+| `spec.methodRules.queriesReturningImmutable[].signature` | Delegate-only query | `return real.{method}()` |
+| `spec.methodRules.queriesReturningCollection[].signature` | Unmodifiable collection query | `Collections.unmodifiable*(real.{method}())` |
+| `spec.methodRules.queriesReturningCollection[].implementation` | Full delegation expression | Copy verbatim |
+| `spec.methodRules.queriesReturningEntity[].implementation` | Nested entity wrapping | `return new ReadOnly{Entity}(real.{method}())` |
+| `spec.constructorRule.implementation[]` | Proxy constructor body lines | Copy in order |
+| `spec.aggregateRootChanges.methods[]` | AR getter method changes | `.original`, `.modified`, `.body[]`, `.note` |
+| `spec.testScenarios[]` | JUnit 5 `@Test` methods | Plain JUnit (NOT ezSpec) |
+| `spec.testScenarios[].given` | Test setup | Construct real entity directly |
+| `spec.testScenarios[].when` | Test action | Wrap in ReadOnly + call method |
+| `spec.testScenarios[].then[]` | Assertions | `assertThrows` or `assertEquals` |
+| `spec.entities[]` | Import resolution for entity types | Used to resolve `import` statements |
+| `spec.valueObjects[]` | Import resolution for VO types | Used to resolve `import` statements |
+| `spec.enums[]` | Import resolution for enum types | Used to resolve `import` statements |
+
+### Generation Order for PATTERN
+
+```
+Step P.1 → {IEntity}.java         (interface, in entityPackage)
+Step P.2 → {ReadOnlyEntity}.java  (proxy, in entityPackage)
+Step P.3 → AR changes notice      (or auto-apply if file exists)
+Step P.4 → {ReadOnlyEntity}Test.java (JUnit 5, in testPackage)
+```
+
+### PATTERN Scope
+
+PATTERN always uses **inmemory-only** scope (no Outbox, no domain events, no Repository).
+Gate 1 test command: `mvn test -Dtest={ReadOnlyEntity}Test -q`
+
+---
+
 ## Important Notes
 
 ### Mapper Location (QUERY — CRITICAL)

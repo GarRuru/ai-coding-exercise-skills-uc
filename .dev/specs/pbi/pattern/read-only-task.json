@@ -1,0 +1,471 @@
+{
+  "pattern": "ReadOnlyEntities",
+  "alsoKnownAs": "Read-Only Wrapper",
+
+  "packageInfo": {
+    "aggregatePackage": "tw.teddysoft.aiscrum.pbi",
+    "entityPackage": "tw.teddysoft.aiscrum.pbi.entity",
+    "testPackage": "tw.teddysoft.aiscrum.pbi.entity"
+  },
+
+
+  "intent": "確保 ProductBacklogItem Aggregate 可以安全地將內部 Task Entity 暴露給外部客戶端，同時保護 PBI 的完整性 invariant。Read-only Task 讓客戶端無法透過回傳的 Task 直接修改其狀態，從而繞過 Aggregate Root 的業務規則（如 PBI auto-completion 與 PBI work regression 機制）。",
+
+  "context": "ProductBacklogItem Aggregate 管理多個 Task Entity。客戶端（如 UI、查詢服務）需要讀取 Task 資訊，但不應直接修改 Task 狀態。所有修改必須透過 ProductBacklogItem 的 use case 方法（moveTask、setTaskStatus、estimateTask 等），才能觸發正確的 Domain Events 並維護 PBI state machine invariant。",
+
+  "forces": [
+    {
+      "name": "Encapsulation",
+      "description": "外部客戶端不得透過回傳的 Task Entity 直接呼叫 setState()、setEstimateHours() 等 command 方法修改 PBI 內部狀態"
+    },
+    {
+      "name": "UbiquitousLanguage",
+      "description": "回傳型別必須維持 Task（或 ITask interface），不可替換成 TaskDto 等與 domain 無關的結構，以保留 Ubiquitous Language"
+    },
+    {
+      "name": "InformingMisuses",
+      "description": "客戶端試圖直接修改 Task 時必須立即拋出 UnsupportedOperationException，而非靜默失敗（靜默失敗會讓客戶端以為修改成功，實則 PBI state machine 未被正確觸發）"
+    },
+    {
+      "name": "InvariantProtection",
+      "description": "Task.setState() 被直接呼叫時，PBI 的 auto-completion 檢查（所有 Task DONE → PBI 變 DONE）和 work regression 檢查（DONE Task 退回 → PBI 退回 IN_PROGRESS）完全不會被觸發，導致 PBI 狀態與實際工作狀態不一致"
+    }
+  ],
+
+  "implementation": "Proxy",
+  "implementationNote": "使用組合委派（Proxy Pattern）。Task Entity 需抽出 ITask interface，ReadOnlyTask implements ITask 而非 extends Task。持有 private final ITask real 的參考，command 方法拋出例外，query 方法委派給 real。此方式不需 shallow copy 屬性，也不依賴繼承。",
+
+  "implementationAlternative": {
+    "approach": "SpecialCase",
+    "note": "若選擇繼承方式（ReadOnlyTask extends Task），需在建構子進行 shallow copy，並覆寫所有 command 方法拋出例外。query 方法回傳 primitive/VO 不需覆寫；collection 需包成 unmodifiable。Task 目前無子類別，繼承方式可行，但需確認 Task 未被宣告 final。"
+  },
+
+  "criticalInvariant": {
+    "name": "PBI State Machine Invariant",
+    "description": "ProductBacklogItem 的 state machine 由 Task 集合狀態驅動，必須透過 AR 方法才能正確觸發。直接操作 Task 會完全繞過以下兩個核心 invariant：",
+    "invariants": [
+      {
+        "name": "PBI Auto-Completion",
+        "trigger": "ProductBacklogItem.moveTask(taskId, DONE) 被呼叫",
+        "check": "若呼叫後 PBI 內所有 Task 均為 DONE 狀態",
+        "result": "PBI 自動從 IN_PROGRESS 轉為 DONE，並發布 PbiCompleted 事件",
+        "bypassedBy": "直接呼叫 task.setState(TaskState.DONE)：Task 狀態改變但 PBI 狀態不觸發，PBI 永遠無法自動完成"
+      },
+      {
+        "name": "PBI Work Regression",
+        "trigger": "ProductBacklogItem.moveTask(taskId, non-DONE state) 被呼叫，且 PBI 當前狀態為 DONE",
+        "check": "被移動的 Task 原本為 DONE，且 PBI 為 DONE 狀態",
+        "result": "PBI 從 DONE 退回 IN_PROGRESS，並發布 PbiWorkRegressed 事件",
+        "bypassedBy": "直接呼叫 task.setState(TaskState.IN_PROGRESS)：Task 狀態退回但 PBI 維持 DONE，產生 PBI 宣稱完成但實有未完成工作的矛盾狀態"
+      }
+    ]
+  },
+
+  "aggregate": "ProductBacklogItem",
+  "aggregateId": "PbiId",
+
+  "entity": {
+    "name": "Task",
+    "interface": "ITask",
+    "description": "ProductBacklogItem 管理的任務，代表 Sprint backlog 中的具體工作項目",
+    "readOnlyName": "ReadOnlyTask"
+  },
+
+  "interfaceDefinition": {
+    "name": "ITask",
+    "description": "從 Task 抽出的 interface，供 Task 與 ReadOnlyTask 共同實作。ProductBacklogItem.getTasks() 回傳型別由 SequencedSet<Task> 改為 SequencedSet<ITask>。",
+    "queryMethods": [
+      "TaskId id()",
+      "PbiId pbiId()",
+      "String name()",
+      "TaskState state()",
+      "Set<String> assigneeIds()",
+      "EstimatedHours estimateHours()",
+      "RemainingHours remainingHours()",
+      "SequencedSet<TaskId> blockedBy()",
+      "String note()",
+      "String extension()"
+    ],
+    "commandMethods": [
+      "void setState(TaskState state)",
+      "void setEstimateHours(EstimatedHours hours)",
+      "void setRemainingHours(RemainingHours hours)",
+      "void addAssignee(String userId)",
+      "void removeAssignee(String userId)",
+      "void addBlockedBy(TaskId taskId)",
+      "void removeBlockedBy(TaskId taskId)",
+      "void setName(String name)"
+    ]
+  },
+
+  "methodRules": {
+    "description": "ReadOnlyTask 對四類方法的處理規則",
+
+    "commands": {
+      "rule": "實作 ITask 的 command 方法，一律拋出 UnsupportedOperationException，禁止直接修改 Task 狀態",
+      "methods": [
+        {
+          "signature": "void setState(TaskState state)",
+          "description": "設定 Task 狀態。由 moveTask() 和 setTaskStatus() UC 透過內部 Task 呼叫",
+          "protects": ["PBI Auto-Completion invariant", "PBI Work Regression invariant"],
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyTask does not support setState. Use ProductBacklogItem.moveTask() or setTaskStatus() instead.\")"
+        },
+        {
+          "signature": "void setEstimateHours(EstimatedHours hours)",
+          "description": "設定 Task 估算工時。由 estimateTask() UC 呼叫，Precondition：Task 尚未被估算",
+          "protects": ["EstimateTask UC precondition（task must not be already estimated）"],
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyTask does not support setEstimateHours. Use ProductBacklogItem.estimateTask() instead.\")"
+        },
+        {
+          "signature": "void setRemainingHours(RemainingHours hours)",
+          "description": "設定 Task 剩餘工時。由 reestimateTask() UC 呼叫，採公式計算 newRemaining = max(oldRemaining + (newEstimated - oldEstimated), 0)",
+          "protects": ["ReestimateTask UC business formula（bypass 會讓 remaining 與 estimate 失去關聯）"],
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyTask does not support setRemainingHours. Use ProductBacklogItem.reestimateTask() instead.\")"
+        },
+        {
+          "signature": "void addAssignee(String userId)",
+          "description": "新增 Task 指派人",
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyTask does not support addAssignee.\")"
+        },
+        {
+          "signature": "void removeAssignee(String userId)",
+          "description": "移除 Task 指派人",
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyTask does not support removeAssignee.\")"
+        },
+        {
+          "signature": "void addBlockedBy(TaskId taskId)",
+          "description": "新增 Task 阻擋依賴",
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyTask does not support addBlockedBy.\")"
+        },
+        {
+          "signature": "void removeBlockedBy(TaskId taskId)",
+          "description": "移除 Task 阻擋依賴",
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyTask does not support removeBlockedBy.\")"
+        },
+        {
+          "signature": "void setName(String name)",
+          "description": "重新命名 Task",
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyTask does not support setName.\")"
+        }
+      ]
+    },
+
+    "queriesReturningImmutable": {
+      "rule": "直接委派給 real（回傳 Value Object、Enum 或 String，本身不可變），不需額外包裝",
+      "methods": [
+        {
+          "signature": "TaskId id()",
+          "returnType": "TaskId（Value Object，不可變）",
+          "implementation": "return real.id()"
+        },
+        {
+          "signature": "PbiId pbiId()",
+          "returnType": "PbiId（Value Object，不可變）",
+          "implementation": "return real.pbiId()"
+        },
+        {
+          "signature": "String name()",
+          "returnType": "String（不可變）",
+          "implementation": "return real.name()"
+        },
+        {
+          "signature": "TaskState state()",
+          "returnType": "TaskState（Enum，不可變）",
+          "implementation": "return real.state()"
+        },
+        {
+          "signature": "EstimatedHours estimateHours()",
+          "returnType": "EstimatedHours（Value Object，nullable，不可變）",
+          "implementation": "return real.estimateHours()"
+        },
+        {
+          "signature": "RemainingHours remainingHours()",
+          "returnType": "RemainingHours（Value Object，nullable，不可變）",
+          "implementation": "return real.remainingHours()"
+        },
+        {
+          "signature": "String note()",
+          "returnType": "String（nullable，不可變）",
+          "implementation": "return real.note()"
+        },
+        {
+          "signature": "String extension()",
+          "returnType": "String（nullable，不可變）",
+          "implementation": "return real.extension()"
+        }
+      ]
+    },
+
+    "queriesReturningEntity": {
+      "rule": "不適用。Task 的 query 方法不回傳任何 Entity（Task 的欄位均為 VO、Enum、String 或 ID collection）",
+      "methods": []
+    },
+
+    "queriesReturningCollection": {
+      "rule": "委派給 real 後包成 unmodifiable collection。集合元素為 String 或 TaskId（VO），本身不可變，不需再包裝成 ReadOnly 版本",
+      "methods": [
+        {
+          "signature": "Set<String> assigneeIds()",
+          "description": "回傳 Task 的所有指派人 ID",
+          "returnType": "Set<String>（元素為 String，不可變；集合本身需設為 unmodifiable）",
+          "implementation": "return Collections.unmodifiableSet(real.assigneeIds())"
+        },
+        {
+          "signature": "SequencedSet<TaskId> blockedBy()",
+          "description": "回傳阻擋此 Task 的其他 TaskId 集合",
+          "returnType": "SequencedSet<TaskId>（元素為 TaskId VO，不可變；集合本身需設為 unmodifiable）",
+          "implementation": "return Collections.unmodifiableSequencedSet(real.blockedBy())"
+        }
+      ]
+    }
+  },
+
+  "constructorRule": {
+    "approach": "Proxy：不 copy 屬性，只持有 real 參考",
+    "description": "ReadOnlyTask 建構子接受 ITask 物件，僅儲存其參考。不需 shallow copy 任何屬性，所有 query 方法均即時委派給 real。",
+    "implementation": [
+      "private final ITask real;",
+      "public ReadOnlyTask(ITask real) {",
+      "    requireNotNull(real, \"real must not be null\");",
+      "    this.real = real;",
+      "}"
+    ]
+  },
+
+  "aggregateRootChanges": {
+    "description": "ProductBacklogItem Aggregate Root 需修改回傳 Task 集合的方法，將每個 Task 包裝成 ReadOnlyTask 後回傳",
+    "methods": [
+      {
+        "original": "public SequencedSet<Task> getTasks()",
+        "modified": "public SequencedSet<ITask> getTasks()",
+        "body": [
+          "return tasks.stream()",
+          "    .map(task -> (ITask) new ReadOnlyTask(task))",
+          "    .collect(Collectors.toCollection(LinkedHashSet::new));",
+          "// 或：return Collections.unmodifiableSequencedSet(",
+          "//     tasks.stream().map(ReadOnlyTask::new)",
+          "//         .collect(Collectors.toCollection(LinkedHashSet::new)));"
+        ],
+        "note": "回傳型別由 SequencedSet<Task> 改為 SequencedSet<ITask>，以便回傳 ReadOnlyTask 而不破壞型別安全。Task 的內部方法仍使用原始 Task 物件，不包裝。"
+      },
+      {
+        "original": "public Optional<Task> findTaskById(TaskId taskId)",
+        "modified": "public Optional<ITask> findTaskById(TaskId taskId)",
+        "body": [
+          "return tasks.stream()",
+          "    .filter(t -> t.id().equals(taskId))",
+          "    .map(task -> (ITask) new ReadOnlyTask(task))",
+          "    .findFirst();"
+        ],
+        "note": "若有此查詢方法，同樣需回傳包裝後的 ReadOnlyTask"
+      }
+    ],
+    "internalUsageNote": "ProductBacklogItem 內部的 moveTask、setTaskStatus、estimateTask 等方法仍透過私有欄位 tasks（SequencedSet<Task>）直接操作原始 Task 物件，不受影響。ReadOnlyTask 僅出現在對外暴露的 getter 回傳值中。"
+  },
+
+  "nestedEntities": [],
+
+  "entities": [
+    {
+      "name": "Task",
+      "description": "ProductBacklogItem 內部管理的工作任務 Entity",
+      "attributes": [
+        { "name": "id", "type": "TaskId", "constraint": "non-null" },
+        { "name": "pbiId", "type": "PbiId", "constraint": "non-null" },
+        { "name": "name", "type": "String", "constraint": "non-null, non-blank" },
+        { "name": "state", "type": "TaskState", "constraint": "non-null, initial=TODO" },
+        { "name": "assigneeIds", "type": "Set<String>", "constraint": "non-null, mutable internally" },
+        { "name": "estimateHours", "type": "EstimatedHours", "constraint": "nullable" },
+        { "name": "remainingHours", "type": "RemainingHours", "constraint": "nullable, equals estimateHours on creation" },
+        { "name": "blockedBy", "type": "SequencedSet<TaskId>", "constraint": "non-null, mutable internally" },
+        { "name": "note", "type": "String", "constraint": "nullable" },
+        { "name": "extension", "type": "String", "constraint": "nullable" }
+      ]
+    }
+  ],
+
+  "valueObjects": [
+    {
+      "name": "TaskId",
+      "fields": [{ "name": "value", "type": "String" }]
+    },
+    {
+      "name": "PbiId",
+      "fields": [{ "name": "value", "type": "String" }]
+    },
+    {
+      "name": "EstimatedHours",
+      "fields": [{ "name": "value", "type": "Hours" }]
+    },
+    {
+      "name": "RemainingHours",
+      "fields": [{ "name": "value", "type": "Hours" }]
+    },
+    {
+      "name": "Hours",
+      "fields": [{ "name": "value", "type": "BigDecimal" }]
+    }
+  ],
+
+  "enums": [
+    {
+      "name": "TaskState",
+      "values": ["TODO", "IN_PROGRESS", "DONE"]
+    }
+  ],
+
+  "postconditions": [
+    {
+      "rule": "Command methods throw exception",
+      "description": "對 ReadOnlyTask 呼叫任何 command 方法（如 setState、setEstimateHours）必須立即拋出 UnsupportedOperationException"
+    },
+    {
+      "rule": "Query methods return correct values",
+      "description": "ReadOnlyTask 的 query 方法必須回傳與原始 Task 相同的資料（透過委派保證）"
+    },
+    {
+      "rule": "Collection queries return unmodifiable",
+      "description": "ReadOnlyTask.assigneeIds() 和 ReadOnlyTask.blockedBy() 必須回傳 unmodifiable collection，對其呼叫 add/remove 應拋出 UnsupportedOperationException"
+    },
+    {
+      "rule": "PBI invariants remain protected",
+      "description": "客戶端持有 ReadOnlyTask 參考並嘗試修改 state，不影響 ProductBacklogItem 的 PBI Auto-Completion 與 PBI Work Regression invariant"
+    },
+    {
+      "rule": "Type compatibility via interface",
+      "description": "ReadOnlyTask implements ITask，getTasks() 回傳 SequencedSet<ITask>，可直接讀取所有 query 方法，型別相容"
+    }
+  ],
+
+  "resultingContext": {
+    "benefits": [
+      "Encapsulation preserved：客戶端無法繞過 Aggregate Root 直接修改 Task 狀態，PBI invariant 得到保護",
+      "Ubiquitous Language maintained：回傳型別為 ITask（Task 的 interface），保留 domain 語意，不是 DTO",
+      "Fail-fast feedback：試圖直接 setState 時立即拋出例外，不會靜默破壞 PBI state machine",
+      "Zero attribute copy overhead：Proxy 方式不需 shallow copy 屬性，直接委派，效能更佳",
+      "No subclass maintenance：Task 無子類別問題，單一 ReadOnlyTask 即可處理所有情況"
+    ],
+    "tradeoffs": [
+      {
+        "concern": "LSP violation",
+        "description": "ReadOnlyTask 實作 ITask 但覆寫 command 方法行為（拋例外而非執行），違反 Liskov Substitution Principle。此為刻意設計取捨，以封裝換取 LSP 嚴格遵守。"
+      },
+      {
+        "concern": "ITask interface 提取",
+        "description": "若 Task 原本無 Interface，需先 refactor 抽出 ITask，並修改 getTasks() 的回傳型別簽名（SequencedSet<Task> → SequencedSet<ITask>），涉及呼叫端的型別調整。"
+      },
+      {
+        "concern": "Internal Task access 需分離",
+        "description": "ProductBacklogItem 內部的 moveTask 等方法必須繼續操作原始 Task（非 ReadOnlyTask），需確保 tasks 欄位維持 SequencedSet<Task> 型別，僅在對外 getter 時包裝。"
+      }
+    ]
+  },
+
+  "testScenarios": [
+    {
+      "name": "should_return_read_only_task_from_get_tasks",
+      "given": "ProductBacklogItem 含有 2 個 Task（taskA: TODO, taskB: IN_PROGRESS）",
+      "when": "呼叫 pbi.getTasks()",
+      "then": [
+        "回傳的 SequencedSet 大小為 2",
+        "每個元素應為 ReadOnlyTask（instanceof ITask 為 true）",
+        "readOnlyTaskA.state() 應回傳 TaskState.TODO",
+        "readOnlyTaskB.state() 應回傳 TaskState.IN_PROGRESS"
+      ]
+    },
+    {
+      "name": "should_throw_when_attempting_direct_setState_on_read_only_task",
+      "given": "從 pbi.getTasks() 取得的 ReadOnlyTask（state = IN_PROGRESS）",
+      "when": "呼叫 readOnlyTask.setState(TaskState.DONE)",
+      "then": [
+        "應立即拋出 UnsupportedOperationException",
+        "PBI 的狀態不應觸發 PbiCompleted 事件（auto-completion 未被誤觸發）",
+        "原始 Task 的 state 仍為 IN_PROGRESS"
+      ]
+    },
+    {
+      "name": "should_protect_pbi_auto_completion_invariant",
+      "given": "PBI 含 2 個 Task（taskA: DONE, taskB: IN_PROGRESS），PBI state = IN_PROGRESS",
+      "when": [
+        "取得 readOnlyTaskB = pbi.getTasks().stream().filter(t -> t.id().equals(taskB.id())).findFirst()",
+        "嘗試呼叫 readOnlyTaskB.setState(TaskState.DONE)"
+      ],
+      "then": [
+        "拋出 UnsupportedOperationException",
+        "pbi.getState() 仍為 IN_PROGRESS（未被誤觸發為 DONE）",
+        "PbiCompleted 事件未被發布"
+      ]
+    },
+    {
+      "name": "should_return_unmodifiable_assignee_ids",
+      "given": "從 pbi.getTasks() 取得的 ReadOnlyTask（assigneeIds 含 'user-1', 'user-2'）",
+      "when": [
+        "呼叫 readOnlyTask.assigneeIds() 取得 Set",
+        "對該 Set 呼叫 add('user-3')"
+      ],
+      "then": [
+        "assigneeIds() 回傳的 Set size 為 2",
+        "add() 呼叫應拋出 UnsupportedOperationException",
+        "原始 Task 的 assigneeIds 仍為 ['user-1', 'user-2']"
+      ]
+    },
+    {
+      "name": "should_return_unmodifiable_blocked_by_collection",
+      "given": "從 pbi.getTasks() 取得的 ReadOnlyTask（blockedBy 含 taskId-X）",
+      "when": [
+        "呼叫 readOnlyTask.blockedBy() 取得 SequencedSet",
+        "對該 SequencedSet 呼叫 add(new TaskId('taskId-Y'))"
+      ],
+      "then": [
+        "blockedBy() 回傳的 SequencedSet size 為 1",
+        "add() 呼叫應拋出 UnsupportedOperationException"
+      ]
+    },
+    {
+      "name": "should_throw_when_attempting_direct_set_estimate_hours",
+      "given": "從 pbi.getTasks() 取得的 ReadOnlyTask（estimateHours = null，尚未估算）",
+      "when": "呼叫 readOnlyTask.setEstimateHours(new EstimatedHours(new Hours(BigDecimal.valueOf(8))))",
+      "then": [
+        "應立即拋出 UnsupportedOperationException",
+        "原始 Task 的 estimateHours 仍為 null（EstimateTask UC 的 precondition 未被繞過）"
+      ]
+    },
+    {
+      "name": "should_delegate_queries_correctly",
+      "given": "ProductBacklogItem 含 Task（id='task-1', name='Implement login', state=TODO, estimateHours=null, assigneeIds=[], blockedBy=[]）",
+      "when": "透過 pbi.getTasks() 取得 ReadOnlyTask，分別呼叫所有 query 方法",
+      "then": [
+        "id().value() 應回傳 'task-1'",
+        "name() 應回傳 'Implement login'",
+        "state() 應回傳 TaskState.TODO",
+        "estimateHours() 應回傳 null",
+        "assigneeIds() 應回傳空 Set",
+        "blockedBy() 應回傳空 SequencedSet",
+        "所有 query 結果與直接操作原始 Task 一致"
+      ]
+    }
+  ],
+
+  "relatedPatterns": [
+    {
+      "name": "SpecialCase",
+      "relation": "Read-only Entities 的另一種實作方式，以繼承取代組合。見 implementationAlternative 說明。"
+    },
+    {
+      "name": "Proxy",
+      "relation": "本規格採用此 pattern，以組合委派方式實現存取控制，不依賴繼承"
+    },
+    {
+      "name": "ReadOnlyProject（.dev/specs/team/pattern/read-only-project.json）",
+      "relation": "同一 pattern 的 SpecialCase 實作範例，以 Team/Project 為示範情境"
+    },
+    {
+      "name": "DataTransferObject (DTO)",
+      "relation": "替代方案，但 DTO 不屬於 domain model，使用 DTO 會破壞 Ubiquitous Language"
+    },
+    {
+      "name": "Prototype（Deep Copy）",
+      "relation": "替代方案，但客戶端修改 copy 時 Aggregate 不會失敗，造成靜默 bug（PBI state machine 以為未被修改）"
+    }
+  ]
+}

@@ -31,7 +31,8 @@ JSON Spec Type Detection Rules:
 1. Has "useCase" + "domainEvent"   → COMMAND (create/delete/state-change)
 2. Has "query" + "projections"     → QUERY
 3. Has "reactor" + "events"        → REACTOR
-4. Has adapter/ path prefix        → NOT SUPPORTED (controller generated from UC)
+4. Has "pattern" + "entity"        → PATTERN (ReadOnly Entity Proxy/SpecialCase)
+5. Has adapter/ path prefix        → NOT SUPPORTED (controller generated from UC)
 ```
 
 Read the spec file and extract:
@@ -56,6 +57,7 @@ COMMAND has two sub-types based on the `method` field:
 | COMMAND (Method-call) | `useCase`, `input`, `aggregate`, `domainEvent`, `domainEvents` |
 | QUERY | `query`, `input`, `output`, `dependencies`, `projections` |
 | REACTOR | `reactor`, `events`, `dependencies` |
+| PATTERN | `pattern`, `entity`, `aggregate`, `packageInfo`, `methodRules`, `testScenarios` |
 
 > **Note on `domainEvent` field format**: Accepts both string (`"SprintEvents.X"`)
 > and array (`["SprintEvents.X"]`). Normalize to array before processing.
@@ -361,6 +363,155 @@ LOAD_PATTERNS:
 **SOURCE**: `spec.testScenarios[]`, `spec.errorHandling[]`
 
 Same critical checks as Command test generation.
+
+---
+
+### ═══ PATTERN: ReadOnly Entity Path ═══
+
+> Triggered when spec has `"pattern"` + `"entity"` top-level fields.
+> Generates a read-only proxy/wrapper for a child Entity inside an Aggregate Root.
+> Does NOT generate UseCase, Repository, or Domain Events — only structural classes.
+
+#### Step P.1 — Generate Interface
+
+**SOURCE**: `spec.entity.interface`, `spec.interfaceDefinition`, `spec.packageInfo.entityPackage`
+
+**Generate**:
+- `{IEntity}.java` in `{entityPackage}` (e.g., `ITask.java` in `tw.teddysoft.aiscrum.pbi.entity`)
+
+**Template**:
+```java
+package {spec.packageInfo.entityPackage};
+
+// imports for all method return types and parameter types
+
+public interface {spec.entity.interface} {
+
+    // --- query methods (from spec.interfaceDefinition.queryMethods[]) ---
+    {returnType} {methodName}();   // one per entry
+
+    // --- command methods (from spec.interfaceDefinition.commandMethods[]) ---
+    void {commandMethodName}({params});   // one per entry
+}
+```
+
+**CRITICAL**:
+- Include ALL methods from `spec.interfaceDefinition.queryMethods[]` AND `spec.interfaceDefinition.commandMethods[]`
+- Imports: use `spec.valueObjects[]`, `spec.enums[]`, `spec.entities[]` to resolve types
+- The real Entity class (`spec.entity.name`) must be updated to `implements {spec.entity.interface}`
+
+#### Step P.2 — Generate ReadOnly Proxy Class
+
+**SOURCE**: `spec.entity.readOnlyName`, `spec.methodRules`, `spec.constructorRule`, `spec.packageInfo.entityPackage`
+
+**Generate**:
+- `{ReadOnlyEntity}.java` in `{entityPackage}` (e.g., `ReadOnlyTask.java`)
+
+**Template**:
+```java
+package {spec.packageInfo.entityPackage};
+
+import java.util.Collections;
+// other imports
+
+public class {spec.entity.readOnlyName} implements {spec.entity.interface} {
+
+    private final {spec.entity.interface} real;
+
+    public {spec.entity.readOnlyName}({spec.entity.interface} real) {
+        // from spec.constructorRule.implementation[]
+        requireNotNull(real, "real must not be null");
+        this.real = real;
+    }
+
+    // --- command methods → throw UnsupportedOperationException ---
+    // (from spec.methodRules.commands[])
+    @Override
+    public void {commandMethod}({params}) {
+        throw new UnsupportedOperationException("{spec.methodRules.commands[i].implementation message}");
+    }
+
+    // --- queries returning immutable (VO / Enum / String) → delegate ---
+    // (from spec.methodRules.queriesReturningImmutable[])
+    @Override
+    public {returnType} {queryMethod}() {
+        return real.{queryMethod}();
+    }
+
+    // --- queries returning collection → unmodifiable delegation ---
+    // (from spec.methodRules.queriesReturningCollection[])
+    @Override
+    public {CollectionType}<{ElementType}> {queryMethod}() {
+        return Collections.unmodifiable{CollectionVariant}(real.{queryMethod}());
+    }
+}
+```
+
+**CRITICAL**:
+- `spec.methodRules.commands[].implementation` contains the exact exception message string — use it verbatim
+- `spec.methodRules.queriesReturningImmutable[].implementation` is always `return real.{method}()`
+- `spec.methodRules.queriesReturningCollection[].implementation` contains the `Collections.unmodifiable*` call
+- `spec.methodRules.queriesReturningEntity[]` — if non-empty, wrap returned entity with its ReadOnly version
+
+#### Step P.3 — Report Aggregate Root Changes (⚠️ MANUAL ACTION REQUIRED)
+
+**SOURCE**: `spec.aggregateRootChanges`
+
+After generating the files, print the following notice:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║   ⚠️  AGGREGATE ROOT MANUAL CHANGES REQUIRED                ║
+╠══════════════════════════════════════════════════════════════╣
+║  The following changes to {spec.aggregate}.java are needed:  ║
+║                                                              ║
+║  (for each entry in spec.aggregateRootChanges.methods[]):    ║
+║    • Change: {original signature}                            ║
+║    • To:     {modified signature}                            ║
+║    • Body:   {body lines}                                     ║
+║    • Note:   {note}                                          ║
+╠══════════════════════════════════════════════════════════════╣
+║  Also update: {spec.entity.name}.java                        ║
+║    → Add "implements {spec.entity.interface}" to class decl  ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+If `{spec.aggregate}.java` already exists in the project, **apply the changes automatically** using Edit tool.
+If not yet generated, record the required changes for when the file is created.
+
+#### Step P.4 — Generate Test
+
+**SOURCE**: `spec.testScenarios[]`, `spec.packageInfo.testPackage`
+
+**Generate**:
+- `{ReadOnlyEntity}Test.java` in `src/test/java/{testPackage}/`
+
+**Template**:
+```java
+@SpringBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
+@ActiveProfiles("test-inmemory")   // ← ONLY for PATTERN tests; no UseCase infra needed
+class {ReadOnlyEntity}Test {
+
+    // For each spec.testScenarios[]:
+    @Test
+    void {scenario.name}() {
+        // Given: build real entity instance directly (new Task(...))
+        // When: wrap in ReadOnlyTask (new ReadOnlyTask(task))
+        // Then: assertions per scenario.then[]
+    }
+}
+```
+
+**CRITICAL**:
+- PATTERN tests do NOT use ezSpec BDD format (no UseCase infrastructure)
+- PATTERN tests use plain JUnit 5 `@Test` with `assertThrows` and `assertEquals`
+- No `@Autowired` repository — entity instances are constructed directly in test
+- `assertThrows(UnsupportedOperationException.class, () -> readOnly.{commandMethod}(...))` for each command
+- `assertEquals(expected, readOnly.{queryMethod}())` for each query
+- `assertThrows(UnsupportedOperationException.class, () -> readOnly.{collectionMethod}().add(...))` for collection immutability
+
+**SCOPE**: `inmemory-only` (PATTERN type always uses inmemory-only scope — no Outbox, no dual-profile)
 
 ---
 

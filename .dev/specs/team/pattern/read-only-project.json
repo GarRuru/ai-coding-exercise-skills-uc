@@ -1,0 +1,306 @@
+{
+  "pattern": "ReadOnlyEntities",
+  "alsoKnownAs": "Read-Only Wrapper",
+  "intent": "確保 Aggregate 可以安全地將內部 Entity 暴露給外部客戶端，同時保護 Aggregate 完整性。Read-only Entity 讓客戶端無法透過回傳的 Entity 修改 Aggregate 狀態。",
+
+  "context": "Team Aggregate 管理多個 Project Entity。客戶端需要查詢 Project 資訊，但不應該直接修改 Project 狀態（所有修改必須透過 Team Aggregate Root）。",
+
+  "forces": [
+    {
+      "name": "Encapsulation",
+      "description": "外部客戶端不得透過回傳的 Entity 修改 Aggregate 狀態"
+    },
+    {
+      "name": "UbiquitousLanguage",
+      "description": "回傳型別必須維持 domain model 中的型別，不可替換成 DTO 等與 domain 無關的結構"
+    },
+    {
+      "name": "InformingMisuses",
+      "description": "客戶端試圖修改時必須立即拋出例外，而非靜默失敗"
+    }
+  ],
+
+  "implementation": "SpecialCase",
+  "implementationNote": "使用繼承（Special Case Pattern）。若 Entity 不允許繼承或需要支援多型，請改用 Proxy 實作（見 implementationAlternative）。",
+
+  "implementationAlternative": {
+    "approach": "Proxy",
+    "steps": [
+      "從 Project 抽出 IProject interface",
+      "ReadOnlyProject implements IProject（而非 extends Project）",
+      "持有 private final IProject real 參考，不 copy 屬性",
+      "command 方法拋出 UnsupportedOperationException",
+      "query 方法委派給 real，回傳 entity 時包成 ReadOnly 版本"
+    ]
+  },
+
+  "aggregate": "Team",
+  "aggregateId": "TeamId",
+
+  "entity": {
+    "name": "Project",
+    "description": "Team 管理的專案，為需要安全暴露的內部 Entity",
+    "readOnlyName": "ReadOnlyProject"
+  },
+
+  "methodRules": {
+    "description": "ReadOnly Entity 對四類方法的處理規則",
+    "commands": {
+      "rule": "覆寫（Override），拋出 UnsupportedOperationException",
+      "methods": [
+        {
+          "signature": "void addMember(Member member)",
+          "description": "新增成員至 Project",
+          "implementation": "throw new UnsupportedOperationException(\"ReadOnlyProject does not support addMember\")"
+        }
+      ]
+    },
+    "queriesReturningImmutable": {
+      "rule": "直接繼承，不覆寫（回傳 primitive 或 Value Object，本身不可變）",
+      "methods": [
+        {
+          "signature": "int size()",
+          "description": "回傳 Project 中 Member 數量",
+          "returnType": "int（primitive，不可變）",
+          "implementation": "inherit"
+        }
+      ]
+    },
+    "queriesReturningEntity": {
+      "rule": "覆寫，將回傳的 Entity 包裝成對應的 ReadOnly 版本",
+      "methods": [
+        {
+          "signature": "Member leader()",
+          "description": "回傳 Project 的負責人",
+          "returnType": "Member（Entity，需包裝）",
+          "implementation": "return new ReadOnlyMember(super.leader())"
+        }
+      ]
+    },
+    "queriesReturningCollection": {
+      "rule": "覆寫，回傳 unmodifiable collection，且集合元素也須包裝成 ReadOnly 版本",
+      "methods": [
+        {
+          "signature": "List<Member> members()",
+          "description": "回傳 Project 的所有成員",
+          "returnType": "List<Member>（Entity collection，需包裝）",
+          "implementation": "return Collections.unmodifiableList(super.members().stream().map(ReadOnlyMember::new).toList())"
+        }
+      ]
+    }
+  },
+
+  "constructorRule": {
+    "approach": "SpecialCase：shallow copy 所有屬性",
+    "description": "ReadOnlyProject 建構子接受 Project 物件，將所有欄位 shallow copy 至自身。此步驟在 SpecialCase 實作中必要；Proxy 實作則不需 copy 屬性。",
+    "implementation": [
+      "this.id = project.getId()",
+      "this.leader = project.leader()",
+      "this.memberList = new ArrayList<>(project.members())"
+    ]
+  },
+
+  "aggregateRootChanges": {
+    "description": "Team Aggregate Root 需修改回傳 Project 的方法，改為回傳 ReadOnlyProject",
+    "methods": [
+      {
+        "original": "public Project getProject(ProjectId id)",
+        "modified": "public Project getProject(ProjectId id)",
+        "body": [
+          "Project project = findProjectById(id).orElseThrow(() -> new ProjectNotFoundException(id))",
+          "return new ReadOnlyProject(project)"
+        ],
+        "note": "回傳型別維持 Project（不改 signature），但實際物件為 ReadOnlyProject。客戶端呼叫時型別相容，但 command 方法會拋例外。"
+      }
+    ]
+  },
+
+  "nestedEntities": [
+    {
+      "name": "Member",
+      "readOnlyName": "ReadOnlyMember",
+      "description": "Project 內部的 Entity，因 Project 暴露了 leader() 和 members()，Member 也需要 ReadOnly 版本",
+      "methods": {
+        "commands": [
+          {
+            "signature": "void changeRole(Role role)",
+            "implementation": "throw new UnsupportedOperationException(\"ReadOnlyMember does not support changeRole\")"
+          }
+        ],
+        "queriesReturningImmutable": [
+          {
+            "signature": "String name()",
+            "returnType": "String（primitive wrapper，不可變）",
+            "implementation": "inherit"
+          },
+          {
+            "signature": "Role role()",
+            "returnType": "Role（Value Object，不可變）",
+            "implementation": "inherit"
+          }
+        ],
+        "queriesReturningEntity": [],
+        "queriesReturningCollection": []
+      }
+    }
+  ],
+
+  "entities": [
+    {
+      "name": "Project",
+      "description": "Team 管理的專案",
+      "attributes": [
+        { "name": "id", "type": "ProjectId", "constraint": "non-null" },
+        { "name": "leader", "type": "Member", "constraint": "non-null" },
+        { "name": "memberList", "type": "List<Member>", "constraint": "non-null, mutable internally" }
+      ]
+    },
+    {
+      "name": "Member",
+      "description": "Project 的成員",
+      "attributes": [
+        { "name": "id", "type": "MemberId", "constraint": "non-null" },
+        { "name": "name", "type": "String", "constraint": "non-null" },
+        { "name": "role", "type": "Role", "constraint": "non-null" }
+      ]
+    }
+  ],
+
+  "valueObjects": [
+    {
+      "name": "TeamId",
+      "fields": [{ "name": "value", "type": "String" }]
+    },
+    {
+      "name": "ProjectId",
+      "fields": [{ "name": "value", "type": "String" }]
+    },
+    {
+      "name": "MemberId",
+      "fields": [{ "name": "value", "type": "String" }]
+    },
+    {
+      "name": "Role",
+      "description": "成員角色（Value Object，不可變）",
+      "fields": [
+        { "name": "title", "type": "String" },
+        { "name": "level", "type": "int" }
+      ]
+    }
+  ],
+
+  "postconditions": [
+    {
+      "rule": "Command methods throw exception",
+      "description": "對 ReadOnlyProject 呼叫任何 command 方法（如 addMember）必須拋出 UnsupportedOperationException"
+    },
+    {
+      "rule": "Query methods return correct values",
+      "description": "ReadOnlyProject 的 query 方法必須回傳與原始 Project 相同的資料"
+    },
+    {
+      "rule": "Nested entities are also read-only",
+      "description": "ReadOnlyProject.leader() 回傳 ReadOnlyMember，ReadOnlyProject.members() 回傳含 ReadOnlyMember 的 unmodifiable List"
+    },
+    {
+      "rule": "Type compatibility preserved",
+      "description": "ReadOnlyProject 仍是 Project 的子型別，getProject() 的 return type 不需改變"
+    },
+    {
+      "rule": "Aggregate state immutable via returned entity",
+      "description": "客戶端持有 ReadOnlyProject 參考並嘗試修改，不影響 Team Aggregate 內部 Project 狀態"
+    }
+  ],
+
+  "resultingContext": {
+    "benefits": [
+      "Encapsulation preserved：客戶端無法繞過 Aggregate Root 修改內部 Entity",
+      "Ubiquitous Language maintained：回傳型別仍是 Project，不是 DTO",
+      "Fail-fast feedback：試圖修改時立即拋出例外，無靜默失敗"
+    ],
+    "tradeoffs": [
+      {
+        "concern": "LSP violation",
+        "description": "ReadOnlyProject 覆寫 command 方法改變行為契約，違反 Liskov Substitution Principle。此為刻意的設計取捨，以封裝換取 LSP 嚴格遵守。"
+      },
+      {
+        "concern": "SpecialCase：每個具體 Entity 需獨立的 ReadOnly 子類別",
+        "description": "如有 DesignProject、ResearchProject 等子類別，各自需要 ReadOnlyDesignProject、ReadOnlyResearchProject。Proxy 實作可避免此問題。"
+      },
+      {
+        "concern": "Proxy：需要抽出 Interface",
+        "description": "若 Entity 原本無 Interface，需先 refactor 抽出 IProject，增加初期改造成本。"
+      }
+    ]
+  },
+
+  "testScenarios": [
+    {
+      "name": "should_return_read_only_project_from_aggregate_root",
+      "given": "Team aggregate 包含一個 Project（含 leader 和 members）",
+      "when": "呼叫 team.getProject(projectId)",
+      "then": [
+        "回傳物件型別應為 ReadOnlyProject（instanceof Project 為 true）",
+        "回傳物件的 size() 應與原始 Project 相同",
+        "回傳物件的 leader() 應回傳 ReadOnlyMember"
+      ]
+    },
+    {
+      "name": "should_throw_when_attempting_to_modify_read_only_project",
+      "given": "從 Team aggregate 取得的 ReadOnlyProject",
+      "when": "呼叫 readOnlyProject.addMember(newMember)",
+      "then": [
+        "應立即拋出 UnsupportedOperationException",
+        "Team aggregate 內部的 Project 狀態不應被修改"
+      ]
+    },
+    {
+      "name": "should_return_unmodifiable_members_collection",
+      "given": "從 Team aggregate 取得的 ReadOnlyProject（含 3 個 members）",
+      "when": "呼叫 readOnlyProject.members() 並嘗試對回傳的 List 呼叫 add()",
+      "then": [
+        "members() 應回傳 size 為 3 的 List",
+        "對回傳的 List 呼叫 add() 應拋出 UnsupportedOperationException",
+        "List 中的每個元素應為 ReadOnlyMember"
+      ]
+    },
+    {
+      "name": "should_throw_when_attempting_to_modify_nested_read_only_member",
+      "given": "從 ReadOnlyProject 取得的 ReadOnlyMember（透過 leader()）",
+      "when": "呼叫 readOnlyMember.changeRole(newRole)",
+      "then": [
+        "應立即拋出 UnsupportedOperationException",
+        "原始 Member 的 role 不應被修改"
+      ]
+    },
+    {
+      "name": "should_preserve_query_correctness_after_wrapping",
+      "given": "原始 Project 有 name='Alpha'、leader 為 'Alice'、2 個 members",
+      "when": "透過 team.getProject(id) 取得 ReadOnlyProject，分別呼叫 size()、leader().name()",
+      "then": [
+        "size() 應回傳 2",
+        "leader().name() 應回傳 'Alice'",
+        "所有 query 結果與直接操作原始 Project 一致"
+      ]
+    }
+  ],
+
+  "relatedPatterns": [
+    {
+      "name": "SpecialCase",
+      "relation": "Read-only Entities 的 SpecialCase 實作借用此 pattern，以繼承呈現特殊行為"
+    },
+    {
+      "name": "Proxy",
+      "relation": "Read-only Entities 的 Proxy 實作借用此 pattern，以組合委派呈現存取控制"
+    },
+    {
+      "name": "DataTransferObject (DTO)",
+      "relation": "替代方案。但 DTO 不屬於 domain model，使用 DTO 會破壞 Ubiquitous Language"
+    },
+    {
+      "name": "Prototype",
+      "relation": "替代方案（deep copy）。但客戶端修改 copy 時 Aggregate 不會失敗，可能造成靜默 bug"
+    }
+  ]
+}
