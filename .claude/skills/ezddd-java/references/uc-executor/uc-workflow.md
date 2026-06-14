@@ -104,7 +104,7 @@ This maps JSON spec fields to the pattern files and code generation targets.
 LOAD_PATTERNS:
   - references/patterns/domain/aggregate.md
   - references/patterns/domain/domain-event.md
-  - references/patterns/domain/value-object.md (if spec has valueObjects[])
+  - references/patterns/domain/value-object.md  ← ALWAYS (needed for *Id class toString() + factory methods)
   - references/patterns/domain/entity.md (if spec has entities[])
 ```
 
@@ -122,6 +122,28 @@ LOAD_PATTERNS:
 - `MAPPING_TYPE_PREFIX` constant required
 - `DateProvider.now()` for timestamps, NOT `Instant.now()`
 - State set ONLY in `when()` method (Event Sourcing golden rule)
+- Every generated `*Id` record MUST have `@Override toString() { return value; }` + `valueOf(String)` — framework uses `toString()` as InMemory map key in `findById()` (FC-17)
+
+**After writing the AR file — check for deferred pattern changes (⚠️ DO NOT SKIP)**:
+
+```
+CHECK: .dev/.pattern-pending/{aggregateName}.json
+  → If file exists:
+      1. Read pendingMethodChanges[]
+      2. For each entry: apply signature + body changes to the just-generated AR file
+         (follow R-1 rule in pattern-pending-schema.md: same sig = body-only change)
+      3. Add requiredImports (skip duplicates)
+      4. Run mvn compile -q to verify
+      5. DELETE .dev/.pattern-pending/{aggregateName}.json
+      6. Print:
+         ╔═══════════════════════════════════════════════════════╗
+         ║  ✅ DEFERRED PATTERN CHANGES APPLIED & FILE DELETED   ║
+         ║  {N} method(s) patched from .pattern-pending          ║
+         ╚═══════════════════════════════════════════════════════╝
+  → If file does not exist: continue normally
+```
+
+**Schema reference**: `references/uc-executor/pattern-pending-schema.md`
 
 #### Step 4.1.5 — Generate Contract Tests (if applicable)
 
@@ -453,31 +475,65 @@ public class {spec.entity.readOnlyName} implements {spec.entity.interface} {
 - `spec.methodRules.queriesReturningCollection[].implementation` contains the `Collections.unmodifiable*` call
 - `spec.methodRules.queriesReturningEntity[]` — if non-empty, wrap returned entity with its ReadOnly version
 
-#### Step P.3 — Report Aggregate Root Changes (⚠️ MANUAL ACTION REQUIRED)
+#### Step P.3 — Apply or Defer Aggregate Root Changes
 
 **SOURCE**: `spec.aggregateRootChanges`
 
-After generating the files, print the following notice:
+**Schema reference**: `references/uc-executor/pattern-pending-schema.md`
 
 ```
+DECISION TREE:
+──────────────────────────────────────────────────────────
+Q: Does {spec.aggregate}.java exist in src/main/java/?
+──────────────────────────────────────────────────────────
+YES → Auto-apply immediately (Branch A)
+NO  → Write deferred pending file (Branch B)
+```
+
+**Branch A — AR already exists: auto-apply via Edit tool**
+
+For each entry in `spec.aggregateRootChanges.methods[]`:
+1. Locate `originalSignature` in the AR file
+2. If `originalSignature != modifiedSignature` → replace signature line
+3. Replace method body with `body[]` lines
+4. Add any missing `requiredImports` to the import block
+5. Run `mvn compile -q` to verify
+
+Print confirmation:
+```
 ╔══════════════════════════════════════════════════════════════╗
-║   ⚠️  AGGREGATE ROOT MANUAL CHANGES REQUIRED                ║
-╠══════════════════════════════════════════════════════════════╣
-║  The following changes to {spec.aggregate}.java are needed:  ║
-║                                                              ║
-║  (for each entry in spec.aggregateRootChanges.methods[]):    ║
-║    • Change: {original signature}                            ║
-║    • To:     {modified signature}                            ║
-║    • Body:   {body lines}                                     ║
-║    • Note:   {note}                                          ║
-╠══════════════════════════════════════════════════════════════╣
-║  Also update: {spec.entity.name}.java                        ║
-║    → Add "implements {spec.entity.interface}" to class decl  ║
+║   ✅  AGGREGATE ROOT CHANGES APPLIED                         ║
+║   {N} method(s) updated in {Aggregate}.java                  ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
-If `{spec.aggregate}.java` already exists in the project, **apply the changes automatically** using Edit tool.
-If not yet generated, record the required changes for when the file is created.
+**Branch B — AR not yet created: write pending file**
+
+Write (or append-merge) to `.dev/.pattern-pending/{spec.aggregate}.json`
+following the schema in `references/uc-executor/pattern-pending-schema.md`.
+
+Merge rule: if file already exists, append new `pendingMethodChanges[]` entries
+using `id` field for deduplication (do NOT overwrite the entire file).
+
+Print deferral notice:
+```
+╔══════════════════════════════════════════════════════════════╗
+║   📋  AGGREGATE ROOT CHANGES DEFERRED                        ║
+╠══════════════════════════════════════════════════════════════╣
+║  {spec.aggregate}.java not yet generated.                    ║
+║  Pending changes written to:                                 ║
+║    .dev/.pattern-pending/{spec.aggregate}.json               ║
+║                                                              ║
+║  These will be auto-applied when the Command spec that       ║
+║  generates {spec.aggregate}.java is executed (Step 4.1).     ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+Also print the manual note for `{spec.entity.name}.java` if applicable:
+```
+Also update: {spec.entity.name}.java
+  → Add "implements {spec.entity.interface}" to class decl
+```
 
 #### Step P.4 — Generate Test
 

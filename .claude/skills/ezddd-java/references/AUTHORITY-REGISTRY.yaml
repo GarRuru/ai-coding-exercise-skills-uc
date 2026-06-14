@@ -819,6 +819,22 @@ topics:
       - file: "rules/critical-rules.md"
         rule_number: 23
 
+  id_record_tostring_findbyid:
+    description: "Every *Id record MUST override toString() returning raw value — OutboxRepository.findById() uses id.toString() as InMemory map key; default record toString() = 'PbiId[value=xxx]' mismatches stored key 'xxx', causing silent empty result (FC-17)"
+    authority: "patterns/domain/value-object.md"
+    authority_line_hint: 249
+    canonical_pattern: '@Override\s+public String toString\(\)\s*\{\s*return value;\s*\}'
+    anti_pattern: 'public record \w+Id\(String value\)\s*\{'
+    severity: critical
+    group: correctness
+    dedup_strategy: marker
+    consumers:
+      - file: "uc-executor/uc-workflow.md"
+        section: "Step 4.1 CRITICAL checks"
+    jit_consumers:
+      - file: "rules/critical-rules.md"
+        rule_number: 34
+
   vo_jsonignore_accessors:
     description: "VO non-constructor accessor methods (is*(), get*(), has*()) MUST have @JsonIgnore"
     authority: "patterns/domain/value-object.md"

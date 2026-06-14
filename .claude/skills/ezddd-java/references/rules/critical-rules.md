@@ -51,6 +51,7 @@
 | 31 | `public void react(DomainEventData message)` in Reactor | Method name is `execute()` NOT `react()` — `Reactor<DomainEventData>` interface defines `execute()` |
 | 32 | `@CrossOrigin` on controllers (Gate 2.5: F-30) | Must use centralized `CorsConfig` bean — per-controller `@CrossOrigin` bypasses centralized CORS policy (see `security-patterns.md` Rule 6) |
 | 33 | `ALTER SEQUENCE message_store.messages_global_position_seq RESTART` in test cleanup | CatchUpRelay checkpoint 會超前 reset 後的 position，導致新 event 永遠被跳過。只 DELETE 資料，不 RESTART sequence (see `.dev/lessons/CATCHUP-RELAY-CHECKPOINT-VS-SEQUENCE-RESET.md`) |
+| 34 | ID record without `@Override toString()` returning raw value (FC-17) | `OutboxRepository.findById()` uses `id.toString()` as the InMemory map lookup key. Java record default `toString()` = `PbiId[value=xxx]`, stored key = `xxx` → findById always returns empty. No compile error, no runtime exception — silently broken. Fix: every `*Id` record MUST override `toString() { return value; }` |
 
 ## ALWAYS REQUIRED
 
@@ -77,6 +78,7 @@
 | 19 | `@SelectPackages` in both TestSuites must include current aggregate package | After creating tests for a NEW aggregate, check `InMemoryTestSuite` + `OutboxTestSuite` — if aggregate package is missing from `@SelectPackages`, add it. Template: `references/templates/test-suites.md` |
 | 20 | Every command method MUST have `_xxxEventGenerated()` postcondition helper verifying all core business fields of the emitted event (see `Plan.java`) | Aggregate Root `ensure()` blocks |
 | 21 | `@Valid` on all `@RequestBody` parameters (Gate 2.5: R-15) | All Controller classes — missing `@Valid` skips DTO validation entirely (see `security-patterns.md` Rule 4) |
+| 22 | Every `*Id` record MUST override `toString()` to return raw value (FC-17) | All aggregate ID and cross-aggregate reference ID classes — `OutboxRepository.findById()` maps domain ID via `.toString()` as InMemory map key. See FORBIDDEN #34 |
 
 ## IMPORT PATH QUICK REFERENCE
 
