@@ -22,7 +22,6 @@ import tw.teddysoft.aiscrum.[aggregate].entity.[Aggregate]Id;
 import tw.teddysoft.aiscrum.[aggregate].usecase.port.[Aggregate]Mapper;
 import tw.teddysoft.aiscrum.[aggregate].usecase.port.out.[Aggregate]Data;
 import tw.teddysoft.ezddd.data.adapter.repository.outbox.OutboxRepositoryPeer;
-import tw.teddysoft.ezddd.data.adapter.repository.outbox.OutboxStore;
 import tw.teddysoft.ezddd.data.io.ezes.store.InMemoryMessageDbClient;
 import tw.teddysoft.ezddd.data.io.ezoutbox.EzOutboxClient;
 import tw.teddysoft.ezddd.data.io.ezoutbox.EzOutboxStoreAdapter;
@@ -57,8 +56,7 @@ public class [Aggregate]InMemoryRepositoryConfig {
         InMemoryOrmClient<[Aggregate]Data> ormClient = new InMemoryOrmClient<>(ormDb);
         EzOutboxClient<[Aggregate]Data, String> outboxClient =
                 new EzOutboxClient<>(ormClient, messageDbClient);
-        OutboxStore<[Aggregate]Data, String> outboxStore =
-                EzOutboxStoreAdapter.createOutboxStore(outboxClient);
+        var outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);  // ⚠️ MUST use var — OutboxStore is abstract
         OutboxRepositoryPeer<[Aggregate]Data, String> peer =
                 new OutboxRepositoryPeer<>(outboxStore);
 
@@ -95,7 +93,6 @@ import tw.teddysoft.aiscrum.[aggregate].usecase.port.[Aggregate]Mapper;
 import tw.teddysoft.aiscrum.[aggregate].usecase.port.out.[Aggregate]Data;
 import tw.teddysoft.aiscrum.[aggregate].io.springboot.config.orm.[Aggregate]OrmClient;
 import tw.teddysoft.ezddd.data.adapter.repository.outbox.OutboxRepositoryPeer;
-import tw.teddysoft.ezddd.data.adapter.repository.outbox.OutboxStore;
 import tw.teddysoft.ezddd.data.io.ezes.store.PgMessageDbClient;
 import tw.teddysoft.ezddd.data.io.ezoutbox.EzOutboxClient;
 import tw.teddysoft.ezddd.data.io.ezoutbox.EzOutboxStoreAdapter;
@@ -113,8 +110,7 @@ public class [Aggregate]OutboxRepositoryConfig {
 
         EzOutboxClient<[Aggregate]Data, String> outboxClient =
                 new EzOutboxClient<>([aggregate]OrmClient, pgMessageDbClient);
-        OutboxStore<[Aggregate]Data, String> outboxStore =
-                EzOutboxStoreAdapter.createOutboxStore(outboxClient);
+        var outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);  // ⚠️ MUST use var — OutboxStore is abstract
         OutboxRepositoryPeer<[Aggregate]Data, String> peer =
                 new OutboxRepositoryPeer<>(outboxStore);
 

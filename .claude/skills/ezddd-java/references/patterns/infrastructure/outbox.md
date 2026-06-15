@@ -459,8 +459,7 @@ public class ${Aggregate}InMemoryRepositoryConfig {
         InMemoryOrmClient<${Aggregate}Data> ormClient = new InMemoryOrmClient<>(ormDb);
         EzOutboxClient<${Aggregate}Data, String> outboxClient =
                 new EzOutboxClient<>(ormClient, messageDbClient);
-        OutboxStore<${Aggregate}Data, String> outboxStore =
-                EzOutboxStoreAdapter.createOutboxStore(outboxClient);
+        var outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);  // ⚠️ MUST use var — OutboxStore is abstract
 
         return new OutboxRepository<>(
                 new OutboxRepositoryPeer<>(outboxStore),

@@ -123,6 +123,9 @@ LOAD_PATTERNS:
 - `DateProvider.now()` for timestamps, NOT `Instant.now()`
 - State set ONLY in `when()` method (Event Sourcing golden rule)
 - Every generated `*Id` record MUST have `@Override toString() { return value; }` + `valueOf(String)` — framework uses `toString()` as InMemory map key in `findById()` (FC-17)
+- **CATEGORY constant REQUIRED**: `public static final String CATEGORY = "${Aggregate}";`
+- **`getCategory()` REQUIRED**: `@Override public String getCategory() { return CATEGORY; }`
+- **`when(Events)` dispatch REQUIRED**: `@Override protected void when(${Aggregate}Events event) { switch (event) { case ${Aggregate}Events.${EventType} e -> when(e); ... } }` — missing any of these three causes compilation failure ("not abstract and does not override abstract method")
 
 **After writing the AR file — check for deferred pattern changes (⚠️ DO NOT SKIP)**:
 

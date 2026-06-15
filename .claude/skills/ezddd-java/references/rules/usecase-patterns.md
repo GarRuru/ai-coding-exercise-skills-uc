@@ -244,8 +244,7 @@ public class ProductInMemoryRepositoryConfig {
         InMemoryOrmClient<ProductData> ormClient = new InMemoryOrmClient<>(ormDb);
         EzOutboxClient<ProductData, String> outboxClient =
                 new EzOutboxClient<>(ormClient, messageDbClient);
-        OutboxStore<ProductData, String> outboxStore =
-                EzOutboxStoreAdapter.createOutboxStore(outboxClient);
+        var outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);  // ⚠️ MUST use var — OutboxStore is abstract
         OutboxRepositoryPeer<ProductData, String> peer =
                 new OutboxRepositoryPeer<>(outboxStore);
 
@@ -265,8 +264,7 @@ public class ProductOutboxRepositoryConfig {
 
         EzOutboxClient<ProductData, String> outboxClient =
                 new EzOutboxClient<>(productOrmClient, pgMessageDbClient);
-        OutboxStore<ProductData, String> outboxStore =
-                EzOutboxStoreAdapter.createOutboxStore(outboxClient);
+        var outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);  // ⚠️ MUST use var — OutboxStore is abstract
         OutboxRepositoryPeer<ProductData, String> peer =
                 new OutboxRepositoryPeer<>(outboxStore);
 

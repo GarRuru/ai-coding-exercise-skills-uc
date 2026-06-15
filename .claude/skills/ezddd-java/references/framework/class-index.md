@@ -270,8 +270,7 @@ public class ProductInMemoryRepositoryConfig {  // Aggregate-Specific 命名
         InMemoryOrmClient<ProductData> ormClient = new InMemoryOrmClient<>(ormDb);
         EzOutboxClient<ProductData, String> outboxClient =
             new EzOutboxClient<>(ormClient, messageDbClient);
-        OutboxStore<ProductData, String> outboxStore =
-            EzOutboxStoreAdapter.createOutboxStore(outboxClient);
+        var outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);  // ⚠️ MUST use var — OutboxStore is abstract
         OutboxRepositoryPeer<ProductData, String> peer =
             new OutboxRepositoryPeer<>(outboxStore);
 
