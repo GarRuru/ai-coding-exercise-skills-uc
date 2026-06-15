@@ -1,6 +1,6 @@
 # AI Coding Skill 課程進度
 
-> 最後更新：2026-06-14
+> 最後更新：2026-06-15
 > 專案：ai-scrum-course（Java 21 + Spring Boot 3.5.3 + ezddd）
 
 ---
@@ -341,6 +341,84 @@ id_record_tostring_findbyid:
   jit_consumers:
     - rules/critical-rules.md rule #34
 ```
+
+---
+
+### 9. Experiment-F：三 Spec 連跑 端對端驗證
+
+**目標**：在全新 worktree（`.worktrees/experiment-F`，branch: `experiment-F`）中依序執行三個 spec，驗證 PATTERN → PATTERN → COMMAND 的跨 spec 串接正確性（pending file 機制、deferred AR patch、InMemory profile）。
+
+**執行指令**：
+```
+/execute-uc --only-inmemory .dev/specs/pbi/pattern/read-only-task.json
+/execute-uc --only-inmemory .dev/specs/team/pattern/read-only-project.json
+/execute-uc --only-inmemory .dev/specs/pbi/usecase/create-pbi.json
+```
+
+#### 9.1 生成的全部 .java 檔案（共 50 個）
+
+**Main — Common（5）**：`AiScrumApp`, `DateProvider`, `DomainEventMapperConfig`, `SharedInfrastructureConfig`, `VolatileRelayConfig`
+
+**Main — Team / read-only-project.json（8）**：`Member`, `MemberId`, `Project`, `ProjectId`, `ReadOnlyMember`, `ReadOnlyProject`, `Role`, `TeamId`
+
+**Main — PBI Entity / read-only-task.json（8）**：`ITask`, `Task`, `ReadOnlyTask`, `TaskId`, `TaskState`, `Hours`, `EstimatedHours`, `RemainingHours`
+
+**Main — PBI / create-pbi.json（20）**：`AcceptanceCriterion`, `Estimate`, `EstimateType`, `Importance`, `PbiId`, `PbiState`, `ProductId`, `SprintId`, `Tag`, `TagGroupId`, `TagId`, `TagRef`, `ProductBacklogItem`, `ProductBacklogItemEvents`, `CreateProductBacklogItemUseCase`, `ProductBacklogItemData`, `ProductBacklogItemMapper`, `CreateProductBacklogItemService`, `ProductBacklogItemInMemoryRepositoryConfig`, `ProductBacklogItemUseCaseConfig`
+
+**Test（9）**：`BaseSpringBootTest`, `BaseUseCaseTest`, `InMemoryTestSuite`, `NotifyFakeHandleAllEventsService`, `ReadOnlyTaskTest`, `ReadOnlyProjectTest`, `ProductBacklogItemContractTest`, `CreateProductBacklogItemServiceTest`
+
+#### 9.2 最終測試結果
+
+| 測試類別 | 結果 |
+|---------|------|
+| `ReadOnlyTaskTest` | ✅ 7/7 |
+| `ReadOnlyProjectTest` | ✅ 5/5 |
+| `ProductBacklogItemContractTest` | ✅ 8/8 |
+| `CreateProductBacklogItemServiceTest` | ✅ 2/2 |
+| **合計** | **✅ 22/22** |
+
+#### 9.3 過程中發現的 Skill 缺失
+
+| # | 缺失類型 | 根本原因 |
+|---|---------|---------|
+| Bug 1 | `OutboxStore<X,Y> outboxStore =` → 必須用 `var` | 模板本身寫錯；OutboxStore 是 abstract，無法明確宣告型別 |
+| Bug 2 | `CATEGORY` / `getCategory()` / `when()` dispatch 未生成 | Step 4.1 CRITICAL checks 沒列出這三個 EsAggregateRoot 必要方法 |
+| 缺失 3 | `@EzScenario` 有時生成錯誤 import | Step 4.3 沒在 CRITICAL checks 明確寫 import 路徑 |
+| 缺失 4 | UseCase import 偶爾幻覺 | 生成步驟沒強制讀 `class-index.md` |
+
+---
+
+### 10. Skill Bug 修正（基於 Experiment-F 發現）
+
+#### 10.1 Bug 1：`OutboxStore` 模板全面改用 `var`
+
+**修改檔案（共 7 個，10 處 assignment）**：
+
+| 檔案 | 說明 |
+|------|------|
+| `patterns/infrastructure/config.md` | authority 來源，6 處 |
+| `templates/aggregate-config-template.md` | Template 1（InMemory）+ Template 2（Outbox），2 處 |
+| `rules/usecase-patterns.md` | InMemory + Outbox 範例，2 處 |
+| `framework/ezapp-api.md` | InMemory + Outbox 範例，2 處 |
+| `patterns/infrastructure/outbox.md` | template 範例，1 處 |
+| `templates/local-utils.md` | Product + Sprint 範例，2 處 |
+| `framework/class-index.md` | 具體範例，1 處 |
+
+全部 assignment 改為：
+```java
+var outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);  // ⚠️ MUST use var — OutboxStore is abstract
+```
+
+（`class-index.md:96` 的 `❌ WRONG` 反例刻意保留，作為反例文件）
+
+#### 10.2 Bug 2：uc-workflow.md Step 4.1 補三項必要 AR boilerplate
+
+新增至 Step 4.1 CRITICAL checks：
+- **CATEGORY constant REQUIRED**：`public static final String CATEGORY = "${Aggregate}";`
+- **`getCategory()` REQUIRED**：`@Override public String getCategory() { return CATEGORY; }`
+- **`when(Events)` dispatch REQUIRED**：switch pattern dispatch；缺少任一 → 編譯錯誤
+
+**Commit**：`fdc2b2f` — 8 files changed, 19 insertions(+), 34 deletions(-)
 
 ---
 
