@@ -69,6 +69,10 @@ tw.teddysoft.ezddd.usecase.port.inout.domainevent.InternalDomainEventDto
 
 ## Messaging 類別
 
+> ⛔ **Reactor 不在此 package！**
+> `Reactor` 的正確 import 是 `tw.teddysoft.ezddd.usecase.port.in.interactor.Reactor`（見下方）。
+> `tw.teddysoft.ezddd.usecase.port.inout.messaging` 只有 MessageProducer 和 PostEventFailureException。
+
 ```
 tw.teddysoft.ezddd.usecase.port.inout.messaging.MessageProducer
 tw.teddysoft.ezddd.usecase.port.inout.messaging.PostEventFailureException
@@ -77,11 +81,20 @@ tw.teddysoft.ezddd.usecase.port.inout.messaging.PostEventFailureException
 ## Reactor Pattern 類別
 
 ```
-tw.teddysoft.ezddd.usecase.port.in.interactor.Reactor
+tw.teddysoft.ezddd.usecase.port.in.interactor.Reactor       ← ✅ 唯一正確路徑
 tw.teddysoft.ezddd.usecase.port.in.interactor.GenericReactor
 ```
 
 ## Outbox Infrastructure 類別
+
+> ⛔ **`OutboxStore` 是 abstract class，不可直接 import 或用 explicit type 宣告！**
+> 必須用 `var` 讓編譯器推斷：
+> ```java
+> // ✅ CORRECT
+> var outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);
+> // ❌ WRONG — OutboxStore 是 abstract，無法直接 new 或用 explicit type
+> OutboxStore<...> outboxStore = EzOutboxStoreAdapter.createOutboxStore(outboxClient);
+> ```
 
 ```
 tw.teddysoft.ezddd.data.adapter.repository.outbox.OutboxRepositoryPeer
@@ -107,6 +120,18 @@ tw.teddysoft.ezddd.data.io.ezes.store.InMemoryMessageDbClient
 ```
 
 ### Message Broker InMemory 支援
+
+> ⛔ **`InMemoryMessageBroker` 沒有 `subscribe()` 方法！**
+> 事件捕獲必須用 `InMemoryConsumer` + `InternalInMemoryMessageConsumer`：
+> ```java
+> // ✅ CORRECT — 測試事件捕獲正確模式
+> var inMemoryConsumer = new InMemoryConsumer<>(inMemoryMessageBroker);
+> var consumer = new InternalInMemoryMessageConsumer(reactorService, inMemoryConsumer);
+> executorService.submit(consumer);
+> // ❌ WRONG — subscribe() 方法不存在
+> inMemoryMessageBroker.subscribe(reactorService);
+> ```
+
 ```
 tw.teddysoft.ezddd.message.broker.io.messagebroker.InMemoryMessageBroker
 tw.teddysoft.ezddd.message.broker.adapter.out.producer.InMemoryMessageProducer
@@ -138,6 +163,10 @@ tw.teddysoft.ezddd.data.adapter.ezes.out.MessageDbToDomainEventDataConverter
 > 禁止使用 `tw.teddysoft.ezspec.EzScenario`（不存在）或 `tw.teddysoft.ezspec.annotation.EzScenario`（不存在）。
 >
 > **⚠️ 常見錯誤 2**: Scenario 執行方法是 `.Execute()`（大寫 E），不是 `.run()` 或 `.execute()`。
+>
+> ⛔ **常見錯誤 3**: `EzSpecExtension` **不存在**於 ezspec library！
+> 禁止在 `BaseSpringBootTest` 加 `@ExtendWith(EzSpecExtension.class)` — 會造成 test-compile 失敗。
+> `@EzScenario` 只是包裝了 `@Test` 的 meta-annotation，不需要任何 JUnit Extension。
 
 ```
 tw.teddysoft.ezspec.extension.junit5.EzScenario   ← ⚠️ 唯一正確的 import 路徑

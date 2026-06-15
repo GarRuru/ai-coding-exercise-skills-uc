@@ -6,6 +6,11 @@
 # ⚠️ 重要：必須放在 src/test/java 目錄
 # 完整路徑：src/test/java/[rootPackage]/test/base/BaseSpringBootTest.java
 
+> ⛔ **絕對禁止加 `@ExtendWith(EzSpecExtension.class)`**
+> `EzSpecExtension` 在 ezspec library 中**不存在**，加了會導致 test-compile 失敗！
+> `@EzScenario` 只是包裝了 `@Test` 的 meta-annotation，不需要任何 JUnit Extension。
+> 這個類別只需要 `@SpringBootTest`，其他什麼都不加。
+
 ```java
 package [rootPackage].test.base;
 
@@ -154,13 +159,15 @@ public abstract class BaseUseCaseTest extends BaseSpringBootTest {
     protected ExecutorService executorService;
 
     /**
-     * Subclasses MUST call this in @BeforeEach.
+     * Subclasses MUST call this in @BeforeEach: setUpEventCapture()
+     * Example: @BeforeEach public void setUp() { setUpEventCapture(); }
      */
     protected void setUpEventCapture() {
         System.out.println("==> Running test with profile: " + activeProfile);
 
         if ("test-outbox".equals(activeProfile) && jdbcTemplate != null) {
             try {
+                // Pre-flight Cleanup SQL: DELETE FROM messages (full path: message_store.messages)
                 jdbcTemplate.execute("DELETE FROM message_store.messages");
                 jdbcTemplate.execute("ALTER SEQUENCE message_store.messages_global_position_seq RESTART WITH 1");
                 System.out.println("Cleaned up message_store.messages table and reset sequence");
@@ -192,12 +199,12 @@ public abstract class BaseUseCaseTest extends BaseSpringBootTest {
      * Subclasses MUST call this in @AfterEach.
      *
      * CRITICAL: For outbox profile, messages MUST be cleaned in tearDown (not just setUp).
-     * Reason: CatchUpRelay starts during Spring Context init (@Bean), which is BEFORE @BeforeEach.
-     * If messages are only cleaned in setUp, the new relay has already read stale messages
-     * from the previous test before cleanup can happen.
+     * Reason: CatchUpRelay starts during Spring Context init (@Bean), which runs BEFORE
+     * the @BeforeEach setUpEventCapture() call — so setUp cleanup is already too late.
+     * If messages are only cleaned in setUp, the new relay has already read stale messages.
      *
      * Timeline: Test N ends → @DirtiesContext destroys Context
-     *   → Test N+1 new Context → CatchUpRelay starts (reads stale msgs!) → @BeforeEach (too late!)
+     *   → Test N+1 new Context → CatchUpRelay starts (reads stale msgs!) → then @BeforeEach setUpEventCapture() runs (too late!)
      *
      * @see testing-patterns.md Error Pattern #7
      */
@@ -270,7 +277,44 @@ BaseUseCaseTest 依賴以下類別：
 > | `@AfterEach` → `tearDownEventCapture()` | ✅ | 關閉 consumer ExecutorService |
 > | `@DirtiesContext(AFTER_EACH_TEST_METHOD)` | 已繼承 | 已在 BaseUseCaseTest 上宣告，concrete class **不需重複**（Spring 會繼承 class-level 註解） |
 > | `Awaitility.await()` for event assertions | ✅ | 事件投遞是非同步的，統一使用 **10 秒** timeout（見 `testing-patterns.md` Rule 5） |
-> | 建立 relay 實例 | ❌ 禁止 | relay 由 Config 管理（避免 Double Relay） |
+> | 建立 relay 實例 | ❌ 禁止 | relay 由 Config 管理（避免 Double Relay）。relay 類別路徑：`tw.teddysoft.ezddd.data.EzesVolatileRelay`（inmemory）、`tw.teddysoft.ezddd.data.EzesCatchUpRelay`（outbox） |
+
+```java
+// ✅ Minimal concrete test class — 完整骨架
+import tw.teddysoft.ezspec.extension.junit5.EzScenario;
+import tw.teddysoft.ezspec.keyword.Feature;
+import tw.teddysoft.ezspec.keyword.ScenarioEnvironment;
+
+class CreateProductBacklogItemServiceTest extends BaseUseCaseTest {
+
+    @Autowired
+    private CreateProductBacklogItemUseCase createProductBacklogItemUseCase;
+
+    @BeforeEach public void setUp() { setUpEventCapture(); }    // MUST call setUpEventCapture()
+    @AfterEach public void tearDown() { tearDownEventCapture(); }
+
+    @EzScenario
+    public void create_pbi_successfully() {
+        Feature.New("CreateProductBacklogItem")
+                .newScenario()
+                .Given("A product exists", env -> { /* no setup needed */ })
+                .When("The user creates a PBI", env -> {
+                    var output = createProductBacklogItemUseCase.execute(buildInput());
+                    env.put("output", output);
+                })
+                .Then("PBI is created and event is published", env -> assertPbiCreatedEvent(env))
+                .Execute();
+    }
+
+    // ❌ WRONG: private/protected/void methodName(ScenarioEnvironment env) — invisible to Class.getMethod()
+    // ✅ CORRECT: step helpers with ScenarioEnvironment MUST be public:
+    public void assertPbiCreatedEvent(ScenarioEnvironment env) { await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> assertThat(notifyFakeHandleAllEventsService.getHandledEvents()).hasSize(1)); }
+}
+```
+
+> **relay 類別完整路徑** (供 Config 參考，禁止在測試中直接建立 relay 實例):
+> - `tw.teddysoft.ezddd.data.EzesVolatileRelay` — inmemory/test-inmemory profile
+> - `tw.teddysoft.ezddd.data.EzesCatchUpRelay` — outbox/test-outbox profile
 
 ## 與其他模板的關係
 - 必須先產生 `local-utils.md` 中的共用類別
