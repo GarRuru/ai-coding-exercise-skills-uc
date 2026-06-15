@@ -124,6 +124,7 @@ LOAD_PATTERNS:
 - State set ONLY in `when()` method (Event Sourcing golden rule)
 - Every generated `*Id` record MUST have `@Override toString() { return value; }` + `valueOf(String)` — framework uses `toString()` as InMemory map key in `findById()` (FC-17)
 - **CATEGORY constant REQUIRED**: `public static final String CATEGORY = "${Aggregate}";`
+- **`id` field + `getId()` REQUIRED**: declare `private ${Aggregate}Id id;` AND `@Override public ${Aggregate}Id getId() { return id; }` — `AggregateRoot`/`EsAggregateRoot` do NOT provide an `id` field; `Entity.getId()` is abstract. Missing → compile error "not abstract and does not override abstract method getId()" (authority: `patterns/domain/aggregate.md` § Step 9.5)
 - **`getCategory()` REQUIRED**: `@Override public String getCategory() { return CATEGORY; }`
 - **`when(Events)` dispatch REQUIRED**: `@Override protected void when(${Aggregate}Events event) { switch (event) { case ${Aggregate}Events.${EventType} e -> when(e); ... } }` — missing any of these three causes compilation failure ("not abstract and does not override abstract method")
 

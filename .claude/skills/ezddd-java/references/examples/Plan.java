@@ -17,6 +17,7 @@ import static tw.teddysoft.ucontract.Contract.*;
 
 public class Plan extends EsAggregateRoot<PlanId, PlanEvents> {
     public final static String CATEGORY = "Plan";
+    private PlanId id;   // EsAggregateRoot does NOT provide an id field — declare it here (see aggregate.md Step 9.5)
     private String name;
     private String userId;
     private Map<ProjectId, Project> projects;
@@ -352,6 +353,12 @@ public class Plan extends EsAggregateRoot<PlanId, PlanEvents> {
         ensure("Plan is marked as deleted", this::_planDeletedFlagSet);
         ensure("A PlanDeleted event is generated correctly", () ->
             _planDeletedEventGenerated());
+    }
+
+    // getId() — Entity interface requires this; AggregateRoot/EsAggregateRoot do NOT implement it (aggregate.md Step 9.5)
+    @Override
+    public PlanId getId() {
+        return id;
     }
 
     @Override
