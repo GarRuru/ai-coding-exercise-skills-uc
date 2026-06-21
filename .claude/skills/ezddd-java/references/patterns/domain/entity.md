@@ -247,6 +247,10 @@ public class Task {
 
 **Rationale:** Encapsulation ensures all mutations go through Aggregate Root.
 
+> **對外回傳 entity 時**：package-private mutation 已擋掉跨 package 的 client 直接改狀態。
+> 但若需回傳 entity 給外部、回傳可變 collection，或 mutation 不得不 public，
+> 請改用 **Read-only Entities** pattern → 見 [`read-only-entity.md`](./read-only-entity.md)。
+
 ### Rule 3: Identity-Based Equality
 
 **Entities are equal if their IDs are equal, regardless of other attributes.**

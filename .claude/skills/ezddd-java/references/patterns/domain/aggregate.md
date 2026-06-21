@@ -23,6 +23,10 @@
 This skill generates Aggregate Root classes following Event Sourcing and DDD patterns.
 It embeds critical rules directly to ensure they cannot be skipped or forgotten.
 
+> **當 Aggregate Root 需把內部 Entity 交給邊界外的 client（回傳 entity / 可變 collection）時**，
+> 為守住封裝與 invariants，請套用 **Read-only Entities** pattern
+> → 見 [`read-only-entity.md`](./read-only-entity.md)。
+
 ---
 
 ## PRE-FLIGHT CHECKLIST ⛔ BLOCKING
