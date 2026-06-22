@@ -1,0 +1,156 @@
+{
+  "pattern": "ReadOnlyEntity",
+  "source": "Hu, Chen, Cheng, Yang, \"Supplemental Patterns for Domain-Driven Design: Read-only Entities, Internal Domain Events, and External Domain Events\", JISE 42(4), 2026, §2",
+  "reference": ".claude/skills/ezddd-java/references/patterns/domain/read-only-entity.md",
+  "implementation": "Proxy",
+  "behavior": "Safely expose Task entities of the ProductBacklogItem aggregate to external clients (Use Case / Controller) so that queries work normally but any state-changing command throws UnsupportedOperationException, and exposed collections cannot be structurally modified.",
+  "aggregate": "ProductBacklogItem",
+  "aggregateId": "PbiId",
+  "entity": "Task",
+  "entityLocation": "tw.teddysoft.aiscrum.pbi.entity",
+
+  "justification": {
+    "residualGap": 1,
+    "gapName": "Returned collection can be structurally modified",
+    "description": "ProductBacklogItem 對外回傳 Task 時，Task.getAssigneeIds() 回傳活的 Set<String>、getBlockedBy() 回傳活的 SequencedSet<TaskId>。外部 client 可對其呼叫 add()/remove() 直接改動 aggregate 內部狀態，造成 silent divergence。",
+    "packagePrivateMutationNote": "Task 的 mutation 方法 (rename/changeState) 目前為 package-private，跨 package client 無法直接呼叫，因此 gap 3 (public mutation) 不適用；採用本 pattern 的主因為 gap 1 (可變集合外洩)。一旦把 command 方法抽到 public 介面 ITask，則 gap 3 同時成立，由 ReadOnlyTask 攔截。",
+    "yagniCheck": "已逐項對照 read-only-entity.md 的殘餘缺口判斷表，確認 gap 1 成立才採用，未對其他 aggregate 無腦套用。"
+  },
+
+  "interface": {
+    "name": "ITask",
+    "location": "tw.teddysoft.aiscrum.pbi.entity",
+    "extractedFrom": "Task",
+    "note": "從 Task 抽出共同介面，Task 與 ReadOnlyTask 皆實作之；型別仍為 domain model，守住 Ubiquitous Language。"
+  },
+
+  "readOnlyClass": {
+    "name": "ReadOnlyTask",
+    "location": "tw.teddysoft.aiscrum.pbi.entity",
+    "implements": "ITask",
+    "realReferenceField": "real",
+    "constructor": "public ReadOnlyTask(ITask real)",
+    "exceptionType": "UnsupportedOperationException",
+    "exceptionMessage": "ReadOnlyTask is immutable",
+    "handlingRules": {
+      "command": "覆寫並拋 UnsupportedOperationException(message)",
+      "queryImmutable": "委派給 real（VO / 基本型別 / enum 直接回傳）",
+      "queryEntity": "委派並把回傳 entity 包成對應 read-only 版（本 entity 無巢狀 entity getter，故不適用）",
+      "queryCollection": "委派後回傳 Collections.unmodifiableXxx；若元素為 entity 亦換成 read-only 版（本 entity 集合元素為 String / TaskId 等 immutable，僅需 unmodifiable）"
+    }
+  },
+
+  "methods": [
+    { "signature": "TaskId getId()", "category": "query-immutable", "returns": "TaskId", "handling": "delegate" },
+    { "signature": "PbiId getPbiId()", "category": "query-immutable", "returns": "PbiId", "handling": "delegate" },
+    { "signature": "String getName()", "category": "query-immutable", "returns": "String", "handling": "delegate" },
+    { "signature": "TaskState getState()", "category": "query-immutable", "returns": "TaskState", "handling": "delegate" },
+    { "signature": "EstimatedHours getEstimateHours()", "category": "query-immutable", "returns": "EstimatedHours", "handling": "delegate" },
+    { "signature": "RemainingHours getRemainingHours()", "category": "query-immutable", "returns": "RemainingHours", "handling": "delegate" },
+    { "signature": "String getNote()", "category": "query-immutable", "returns": "String", "handling": "delegate" },
+    { "signature": "String getExtension()", "category": "query-immutable", "returns": "String", "handling": "delegate" },
+    { "signature": "Set<String> getAssigneeIds()", "category": "query-collection", "returns": "Set<String>", "handling": "return Collections.unmodifiableSet(real.getAssigneeIds())" },
+    { "signature": "SequencedSet<TaskId> getBlockedBy()", "category": "query-collection", "returns": "SequencedSet<TaskId>", "handling": "return Collections.unmodifiableSequencedSet(real.getBlockedBy())" },
+    { "signature": "void rename(String newName)", "category": "command", "handling": "throw UnsupportedOperationException(\"ReadOnlyTask is immutable\")" },
+    { "signature": "void changeState(TaskState newState)", "category": "command", "handling": "throw UnsupportedOperationException(\"ReadOnlyTask is immutable\")" }
+  ],
+
+  "aggregateChanges": {
+    "ProductBacklogItem.addTask": {
+      "signature": "public void addTask(TaskId taskId, String name)",
+      "event": "ProductBacklogItemEvents.TaskAddedToPbi",
+      "body": "require(not deleted) + require(task id absent) → apply(TaskAddedToPbi) → ensure(task present, event generated)。when(TaskAddedToPbi) 在 tasks 集合中加入 new Task(taskId, this.id, name)。",
+      "note": "新增此 command 是為了讓 Task 能合法進入 aggregate，否則 getTask()/getTasks() 永遠空集合、邊界測試無從寫起。Task 進入後一律只能以 ReadOnlyTask 對外交出。"
+    },
+    "ProductBacklogItem.getTask": {
+      "signature": "public ITask getTask(TaskId taskId)",
+      "body": "return new ReadOnlyTask(tasks.stream().filter(t -> t.getId().equals(taskId)).findFirst().orElse(null));"
+    },
+    "ProductBacklogItem.getTasks": {
+      "signature": "public SequencedSet<ITask> getTasks()",
+      "body": "回傳 unmodifiable 的 LinkedHashSet，內含每個 Task 包成 ReadOnlyTask",
+      "note": "現有 getTasks() 回傳 SequencedSet<Task>；採用本 pattern 後應改回傳 read-only 介面型別並包成不可修改集合。"
+    }
+  },
+
+  "domainEventsAdded": [
+    {
+      "name": "TaskAddedToPbi",
+      "type": "InternalDomainEvent (非 ConstructionEvent)",
+      "fields": "pbiId, taskId, name, metadata, id, occurredOn",
+      "registeredInMapper": true,
+      "addedToSealedPermits": true
+    }
+  ],
+
+  "testNote": "所有 scenario 一律從 aggregate root 邊界進行（pbi.getTask()/getTasks()），不直接 new ReadOnlyTask；ReadOnlyTask 的隔離單元測試另見 ReadOnlyTaskTest，定位為 proxy 機制測試，不宣稱覆蓋本 spec scenario。邊界測試對應 ProductBacklogItemReadOnlyTaskTest。",
+
+  "testScenarios": [
+    {
+      "name": "add_task_emits_event",
+      "given": "a ProductBacklogItem",
+      "when": "client calls addTask(taskId, name)",
+      "then": [
+        "the task is added and a TaskAddedToPbi event is emitted",
+        "getTask(taskId).getPbiId() equals the aggregate id",
+        "addTask with a duplicate taskId is rejected"
+      ],
+      "implementedBy": "ProductBacklogItemReadOnlyTaskTest$AddTask"
+    },
+    {
+      "name": "get_task_returns_read_only_and_delegates_queries",
+      "given": "a ProductBacklogItem with a Task added via addTask()",
+      "when": "client obtains the Task via pbi.getTask(taskId) and calls query methods",
+      "then": [
+        "the returned object is an instanceof ReadOnlyTask",
+        "getId()/getName()/getState() return the underlying Task values",
+        "getTask() of an unknown id returns null"
+      ],
+      "implementedBy": "ProductBacklogItemReadOnlyTaskTest$GetTask"
+    },
+    {
+      "name": "read_only_task_rejects_command",
+      "given": "a Task obtained from pbi.getTask()",
+      "when": "client calls rename() or changeState()",
+      "then": [
+        "UnsupportedOperationException is thrown",
+        "re-reading via pbi.getTask() shows the aggregate's Task state is unchanged"
+      ],
+      "implementedBy": "ProductBacklogItemReadOnlyTaskTest$CommandsRejected"
+    },
+    {
+      "name": "read_only_task_collection_is_unmodifiable",
+      "given": "a Task obtained from pbi.getTask()",
+      "when": "client calls getAssigneeIds().add(...) or getBlockedBy().add(...)",
+      "then": [
+        "UnsupportedOperationException is thrown by the collection",
+        "re-reading via pbi.getTask() shows the aggregate's internal collections are unchanged"
+      ],
+      "implementedBy": "ProductBacklogItemReadOnlyTaskTest$CollectionsUnmodifiable"
+    },
+    {
+      "name": "get_tasks_returns_unmodifiable_collection_of_read_only_tasks",
+      "given": "a ProductBacklogItem with one or more Tasks",
+      "when": "client calls pbi.getTasks() and attempts add()/remove()",
+      "then": [
+        "the returned collection throws UnsupportedOperationException on structural modification",
+        "each element is a ReadOnlyTask whose command methods throw UnsupportedOperationException"
+      ],
+      "implementedBy": "ProductBacklogItemReadOnlyTaskTest$GetTasks"
+    }
+  ],
+
+  "resultingContext": [
+    "封裝保全：client 無法繞過 ProductBacklogItem root 修改 Task 或其集合。",
+    "對齊 Ubiquitous Language：回傳型別仍為 domain model 介面 ITask（非 DTO）。",
+    "誤用即時回饋：command 與集合結構性修改立即 fail-fast 拋例外。",
+    "刻意違反 LSP：ReadOnlyTask 保留 ITask 型別但行為契約改變（不允許改狀態），為蓄意取捨。"
+  ],
+
+  "notImplemented": {
+    "alternativeRejected": [
+      "回傳 DTO：改變方法簽章並暴露非 domain 型別，違反 Ubiquitous Language（read model 另走 Query/Projection）。",
+      "Prototype deep copy：client 改 copy 不失敗，缺 fail-fast，產生隱藏 bug。"
+    ]
+  }
+}
